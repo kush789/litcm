@@ -13,6 +13,7 @@ import os
 import re
 import json
 import unicodedata as ud
+import pickle
 
 import kenlm
 import numpy as np
@@ -120,6 +121,10 @@ class LIT():
         """compute character-level and word-level CPs of words and use the 
         linear combination of these scores to predict language tags"""
 
+        feature_vector = []
+
+        # print "word: ", ''.join(word.lower())
+
         # compute character level and word level language probabilities
         lang_probability = list()
         for i,tag in enumerate(self.labels):
@@ -129,24 +134,49 @@ class LIT():
             else:
                 word_probability = self.blm_wp[i].score(' '.join(word.lower()))
                 sen_probability = self.blm_sp[i].score(sen.lower())
+
+
             lang_probability.append(word_probability + sen_probability)
 
-        # find tag with highest probability 
+            feature_vector.append(word_probability)
+            feature_vector.append(sen_probability)
+
+        # find tag with highest probability
         idx = np.argmax(lang_probability)
-        tag = self.labels[idx]
+
+
+        with open('logres_classifier.pkl', 'rb') as fid:
+            logres = pickle.load(fid)
+
+        value = logres.predict([feature_vector])[0]
+        # tag = self.labels[idx]
+
+        if value == 0:
+            tag = 'hin'
+        else:
+            tag = 'eng'
+
         if tag=='eng':
             self.idfsen += "{}\Eng ".format(word)
+
+            feature_vector.append("Eng")
         else:
             if self.flag:
                 self.transliterate(word, tag)
             else:
                 self.idfsen += "{}\{} ".format(word,tag.title())
             
+            feature_vector.append("Hin")
+
+        return feature_vector
+
     def predict(self, word_list):
         """Takes a list of words, records context (3-gram) and labels 
         non-alphabetic words with '\O' (Other). Each word is identified 
         using  character-level language models of individual words 
         and their context (3-gram)"""
+
+        feature_vectors = []
 
         i, tri_gram = 0, ['']*3
         for word in word_list:
@@ -188,17 +218,21 @@ class LIT():
                 tri_gram[-1] = word
                 i+=1
                 self.print_queue(i)
-                self.check(cur_word, sen)
+                feature_vector = self.check(cur_word, sen)
+                feature_vectors.append(feature_vector)
 
         # NOTE last 2 words of a sentence
         for j in range(1,3):
             if tri_gram[j]:
                 i+=1
                 self.print_queue(i)
-                self.check(tri_gram[j], ' '.join(''.join(tri_gram[j-1:])))
+                feature_vector = self.check(tri_gram[j], ' '.join(''.join(tri_gram[j-1:])))
+                feature_vectors.append(feature_vector)
 
         if self.queue:
             self.print_queue(self.queue[0][1])
+
+        return feature_vectors
 
     def identify(self, line):
         """Split line into sentences and work sentence-by-sentence"""
@@ -207,6 +241,8 @@ class LIT():
         sentences = re.sub(r'([.?]\s\s*)([A-Z0-9])', r'\1\n\2', line).split('\n')
         for sen in sentences:
             words = sen.split()
-            self.predict(words)
+            feature_vectors = self.predict(words)
 
+        self.idfsen += "\n"
+        # self.idfsen += str(feature_vectors)
         return self.idfsen
